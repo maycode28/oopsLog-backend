@@ -1,0 +1,21 @@
+# Spring config
+src/main/resources/application.yaml
+src/main/resources/application-*.yaml
+
+# build
+build/
+.gradle/
+dist/
+out/
+target/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.iml
+
+# Logs
+*.log
