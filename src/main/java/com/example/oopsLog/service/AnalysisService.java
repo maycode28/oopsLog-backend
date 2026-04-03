@@ -1,13 +1,20 @@
 package com.example.oopsLog.service;
 
 import com.example.oopsLog.dto.response.AnalysisResponse;
+import com.example.oopsLog.prompt.AiGardenerPromptBuilder;
 import com.example.oopsLog.repository.AnalysisRepository;
 import com.example.oopsLog.entity.AnalysisRecord;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import tools.jackson.databind.JsonNode;import tools.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -15,123 +22,128 @@ import java.util.Map;
 @Service
 public class AnalysisService {
 
-    @Value("${openai.api.key}")
-    private String openAiApiKey;
+    @Value("${gemini.api-key:}")
+    private String geminiApiKey;
+
+    @Value("${gemini.model:gemini-2.5-flash}")
+    private String geminiModel;
 
     private final AnalysisRepository repository;
+    private final AiGardenerPromptBuilder promptBuilder;
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public AnalysisService(AnalysisRepository repository) {
+    public AnalysisService(AnalysisRepository repository, AiGardenerPromptBuilder promptBuilder) {
         this.repository = repository;
+        this.promptBuilder = promptBuilder;
     }
 
     public AnalysisResponse analyze(String text) throws Exception {
-        // 1. OpenAI에 보낼 프롬프트 구성
-        String prompt = """
-                당신은 심리 상담 전문가입니다. 아래 실패 경험을 분석하고,
-                반드시 다음 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
-                
-                {
-                  "summary": "실패 경험 한 줄 요약",
-                  "emotion": "주요 감정들 (예: 수치심, 좌절감)",
-                  "bias": ["인지 왜곡 1", "인지 왜곡 2"],
-                  "reframe": "새로운 시각으로 재해석한 내용",
-                  "actions": ["실천 방안 1", "실천 방안 2", "실천 방안 3"]
-                }
-                
-                분석할 실패 경험:
-                """ + text;
+        if (geminiApiKey == null || geminiApiKey.isBlank()) {
+            throw new IllegalStateException("Missing Gemini API key. Set `gemini.api-key` in application.yaml or `GEMINI_API_KEY` env var.");
+        }
 
-        // 2. OpenAI API 요청 구성
+        // 1) Gemini에 보낼 Cognitive-only 프롬프트 구성
+        String systemPrompt = promptBuilder.buildSystemPrompt();
+        String userPrompt = promptBuilder.buildUserPrompt(text);
+
+        // 2) Gemini API 요청 구성
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(openAiApiKey);
 
         Map<String, Object> requestBody = Map.of(
-                "model", "gpt-4o-mini",
-                "messages", List.of(
-                        Map.of("role", "user", "content", prompt)
+                "systemInstruction", Map.of(
+                        "parts", List.of(
+                                Map.of("text", systemPrompt)
+                        )
                 ),
-                "temperature", 0.7
+                "contents", List.of(
+                        Map.of(
+                                "role", "user",
+                                "parts", List.of(
+                                        Map.of("text", userPrompt)
+                                )
+                        )
+                ),
+                "generationConfig", Map.of(
+                        "temperature", 0.2,
+                        "maxOutputTokens", 1024
+                )
         );
 
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
 
-        // 3. OpenAI API 호출
-        ResponseEntity<String> response = restTemplate.postForEntity(
-                "https://api.openai.com/v1/chat/completions",
-                request,
-                String.class
-        );
+        // 3) Gemini API 호출
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
+                + geminiModel + ":generateContent?key=" + geminiApiKey;
 
-        // 4. 응답 파싱
+        ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
+
+        // 4) 응답 파싱
         JsonNode root = objectMapper.readTree(response.getBody());
-        String content = root
-                .path("choices").get(0)
-                .path("message")
-                .path("content")
-                .asText();
+        String rawText = extractGeminiText(root);
 
-        JsonNode analysisJson = objectMapper.readTree(content);
+        String json = extractJsonObject(rawText);
+        AnalysisResponse body = objectMapper.readValue(json, AnalysisResponse.class);
 
-        String summary  = analysisJson.path("summary").asText();
-        String emotion  = analysisJson.path("emotion").asText();
-        String reframe  = analysisJson.path("reframe").asText();
-
-        // bias 배열 → 콤마 구분 문자열
-        List<String> biasList = List.of();
-        if (analysisJson.has("bias")) {
-            biasList = objectMapper.convertValue(
-                    analysisJson.path("bias"),
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class)
-            );
-        }
-
-        // actions 배열 → 파이프 구분 문자열
-        List<String> actionsList = List.of();
-        if (analysisJson.has("actions")) {
-            actionsList = objectMapper.convertValue(
-                    analysisJson.path("actions"),
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class)
-            );
-        }
-
-        // 5. DB 저장
+        // 5) DB 저장
         AnalysisRecord record = new AnalysisRecord();
         record.setText(text);
-        record.setSummary(summary);
-        record.setEmotion(emotion);
-        record.setBiasRaw(String.join(",", biasList));
-        record.setReframe(reframe);
-        record.setActionsRaw(String.join("|", actionsList));
+        // 히스토리 조회를 위해 LLM의 raw JSON을 그대로 저장합니다.
+        record.setReframe(json);
+        // (선택) legacy 컬럼에 distortion/facts 일부를 채워둘 수 있습니다.
+        if (body.getAnalysis() != null) {
+            if (body.getAnalysis().getCoreInterpretation() != null) {
+                record.setSummary(body.getAnalysis().getCoreInterpretation());
+            }
+            if (body.getAnalysis().getDistortions() != null) {
+                record.setBiasRaw(String.join(",", body.getAnalysis().getDistortions()));
+            }
+            if (body.getAnalysis().getFacts() != null) {
+                record.setActionsRaw(String.join("|", body.getAnalysis().getFacts()));
+            }
+        }
 
         AnalysisRecord saved = repository.save(record);
 
-        // 6. 응답 DTO 구성
-        AnalysisResponse dto = new AnalysisResponse();
-        dto.setId(saved.getId());
-        dto.setText(saved.getText());
-        dto.setSummary(saved.getSummary());
-        dto.setEmotion(saved.getEmotion());
-        dto.setBias(biasList);
-        dto.setReframe(saved.getReframe());
-        dto.setActions(actionsList);
-
-        return dto;
+        return body;
     }
 
     public List<AnalysisResponse> getHistory() {
         return repository.findAll().stream().map(record -> {
-            AnalysisResponse dto = new AnalysisResponse();
-            dto.setId(record.getId());
-            dto.setText(record.getText());
-            dto.setSummary(record.getSummary());
-            dto.setEmotion(record.getEmotion());
-            dto.setBias(record.getBias());
-            dto.setReframe(record.getReframe());
-            dto.setActions(record.getActions());
+            AnalysisResponse dto;
+            String json = record.getReframe();
+            if (json != null && !json.isBlank()) {
+                try {
+                    dto = objectMapper.readValue(json, AnalysisResponse.class);
+                } catch (Exception ignored) {
+                    // 과거 데이터가 JSON 포맷이 아닌 경우를 대비합니다.
+                    dto = new AnalysisResponse();
+                }
+            } else {
+                dto = new AnalysisResponse();
+            }
+
             return dto;
         }).toList();
+    }
+
+    private String extractGeminiText(JsonNode root) {
+        // Gemini generateContent 응답에서 candidates[0].content.parts[0].text 추출
+        JsonNode candidates = root.path("candidates");
+        if (!candidates.isArray() || candidates.isEmpty()) return "";
+        JsonNode parts = candidates.get(0).path("content").path("parts");
+        if (!parts.isArray() || parts.isEmpty()) return "";
+        return parts.get(0).path("text").asText("");
+    }
+
+    private String extractJsonObject(String content) {
+        if (content == null) return "{}";
+        int start = content.indexOf('{');
+        int end = content.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return content.substring(start, end + 1);
+        }
+        return content;
     }
 }
