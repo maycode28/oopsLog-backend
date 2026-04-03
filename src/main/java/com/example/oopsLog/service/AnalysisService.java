@@ -1,20 +1,18 @@
 package com.example.oopsLog.service;
 
 import com.example.oopsLog.dto.response.AnalysisResponse;
+import com.example.oopsLog.entity.AnalysisRecord;
 import com.example.oopsLog.prompt.AiGardenerPromptBuilder;
 import com.example.oopsLog.repository.AnalysisRepository;
-import com.example.oopsLog.entity.AnalysisRecord;
-import jakarta.annotation.PostConstruct;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -40,14 +38,12 @@ public class AnalysisService {
 
     public AnalysisResponse analyze(String text) throws Exception {
         if (geminiApiKey == null || geminiApiKey.isBlank()) {
-            throw new IllegalStateException("Missing Gemini API key. Set `gemini.api-key` in application.yaml or `GEMINI_API_KEY` env var.");
+            throw new IllegalStateException("Missing Gemini API key. Set `gemini.api-key` in application.yaml.");
         }
 
-        // 1) Gemini에 보낼 Cognitive-only 프롬프트 구성
         String systemPrompt = promptBuilder.buildSystemPrompt();
         String userPrompt = promptBuilder.buildUserPrompt(text);
 
-        // 2) Gemini API 요청 구성
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
@@ -67,31 +63,34 @@ public class AnalysisService {
                 ),
                 "generationConfig", Map.of(
                         "temperature", 0.2,
-                        "maxOutputTokens", 1024
+                        "maxOutputTokens", 4096,
+                        "responseMimeType", "application/json"
                 )
         );
 
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
 
-        // 3) Gemini API 호출
         String url = "https://generativelanguage.googleapis.com/v1beta/models/"
                 + geminiModel + ":generateContent?key=" + geminiApiKey;
 
         ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
 
-        // 4) 응답 파싱
-        JsonNode root = objectMapper.readTree(response.getBody());
-        String rawText = extractGeminiText(root);
+        if (response.getBody() == null || response.getBody().isBlank()) {
+            throw new IllegalStateException("Gemini 응답 본문이 비어 있습니다.");
+        }
 
+        JsonNode root = objectMapper.readTree(response.getBody());
+        validateGeminiResponse(root);
+
+        String rawText = extractGeminiText(root);
         String json = extractJsonObject(rawText);
+
         AnalysisResponse body = objectMapper.readValue(json, AnalysisResponse.class);
 
-        // 5) DB 저장
         AnalysisRecord record = new AnalysisRecord();
         record.setText(text);
-        // 히스토리 조회를 위해 LLM의 raw JSON을 그대로 저장합니다.
         record.setReframe(json);
-        // (선택) legacy 컬럼에 distortion/facts 일부를 채워둘 수 있습니다.
+
         if (body.getAnalysis() != null) {
             if (body.getAnalysis().getCoreInterpretation() != null) {
                 record.setSummary(body.getAnalysis().getCoreInterpretation());
@@ -104,8 +103,7 @@ public class AnalysisService {
             }
         }
 
-        AnalysisRecord saved = repository.save(record);
-
+        repository.save(record);
         return body;
     }
 
@@ -113,11 +111,11 @@ public class AnalysisService {
         return repository.findAll().stream().map(record -> {
             AnalysisResponse dto;
             String json = record.getReframe();
+
             if (json != null && !json.isBlank()) {
                 try {
                     dto = objectMapper.readValue(json, AnalysisResponse.class);
                 } catch (Exception ignored) {
-                    // 과거 데이터가 JSON 포맷이 아닌 경우를 대비합니다.
                     dto = new AnalysisResponse();
                 }
             } else {
@@ -128,22 +126,71 @@ public class AnalysisService {
         }).toList();
     }
 
-    private String extractGeminiText(JsonNode root) {
-        // Gemini generateContent 응답에서 candidates[0].content.parts[0].text 추출
+    private void validateGeminiResponse(JsonNode root) {
         JsonNode candidates = root.path("candidates");
-        if (!candidates.isArray() || candidates.isEmpty()) return "";
-        JsonNode parts = candidates.get(0).path("content").path("parts");
-        if (!parts.isArray() || parts.isEmpty()) return "";
-        return parts.get(0).path("text").asText("");
+
+        if (!candidates.isArray() || candidates.isEmpty()) {
+            throw new IllegalStateException("Gemini 응답에 candidates가 없습니다: " + root.toPrettyString());
+        }
+
+        JsonNode candidate = candidates.get(0);
+        String finishReason = candidate.path("finishReason").asText("");
+
+        if ("MAX_TOKENS".equals(finishReason)) {
+            throw new IllegalStateException("Gemini 응답이 maxOutputTokens 제한에 걸려 잘렸습니다. 프롬프트를 줄이거나 maxOutputTokens를 더 늘려야 합니다.");
+        }
+
+        if ("SAFETY".equals(finishReason)) {
+            throw new IllegalStateException("Gemini 응답이 safety 정책으로 차단되었습니다.");
+        }
+
+        JsonNode parts = candidate.path("content").path("parts");
+        if (!parts.isArray() || parts.isEmpty()) {
+            throw new IllegalStateException("Gemini 응답 content.parts가 비어 있습니다: " + root.toPrettyString());
+        }
+    }
+
+    private String extractGeminiText(JsonNode root) {
+        JsonNode candidates = root.path("candidates");
+        if (!candidates.isArray() || candidates.isEmpty()) {
+            return "";
+        }
+
+        JsonNode candidate = candidates.get(0);
+        JsonNode parts = candidate.path("content").path("parts");
+        if (!parts.isArray() || parts.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        for (JsonNode part : parts) {
+            if (part.has("text")) {
+                sb.append(part.path("text").asText(""));
+            }
+        }
+        return sb.toString().trim();
     }
 
     private String extractJsonObject(String content) {
-        if (content == null) return "{}";
-        int start = content.indexOf('{');
-        int end = content.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            return content.substring(start, end + 1);
+        if (content == null || content.isBlank()) {
+            return "{}";
         }
-        return content;
+
+        String cleaned = content.trim();
+
+        if (cleaned.startsWith("```")) {
+            cleaned = cleaned.replaceFirst("^```(?:json)?\\s*", "");
+            cleaned = cleaned.replaceFirst("\\s*```$", "");
+            cleaned = cleaned.trim();
+        }
+
+        int start = cleaned.indexOf('{');
+        int end = cleaned.lastIndexOf('}');
+
+        if (start >= 0 && end > start) {
+            return cleaned.substring(start, end + 1).trim();
+        }
+
+        return cleaned;
     }
 }
