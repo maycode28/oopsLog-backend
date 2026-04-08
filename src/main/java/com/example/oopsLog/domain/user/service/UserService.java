@@ -1,6 +1,7 @@
 package com.example.oopsLog.domain.user.service;
 
 import com.example.oopsLog.domain.user.dto.request.UserCreateRequest;
+import com.example.oopsLog.domain.user.dto.request.UserLoginRequest;
 import com.example.oopsLog.domain.user.dto.request.UserUpdateRequest;
 import com.example.oopsLog.domain.user.entity.User;
 import com.example.oopsLog.domain.user.repository.UserRepository;
@@ -21,7 +22,14 @@ public class UserService {
         this.userRepository = userRepository;
     }
 
-    public User create(UserCreateRequest request) {
+    public User signUp(UserCreateRequest request) {
+        if (userRepository.findByLoginId(request.loginId()).isPresent()) {
+            throw new CustomException(ErrorCode.LOGIN_ID_ALREADY_EXISTS);
+        }
+        if (userRepository.findByEmail(request.email()).isPresent()) {
+            throw new CustomException(ErrorCode.EMAIL_ALREADY_EXISTS);
+        }
+
         User user = new User(
                 request.loginId(),
                 request.password(),
@@ -32,6 +40,17 @@ public class UserService {
                 request.email()
         );
         return userRepository.save(user);
+    }
+
+    public User login(UserLoginRequest request) {
+        User user = userRepository.findByLoginId(request.loginId())
+                .orElseThrow(() -> new CustomException(ErrorCode.INVALID_CREDENTIALS));
+
+        // This skeleton compares plain text. Replace with password encoder in production.
+        if (!user.getPassword().equals(request.password())) {
+            throw new CustomException(ErrorCode.INVALID_CREDENTIALS);
+        }
+        return user;
     }
 
     public List<User> findAll() {

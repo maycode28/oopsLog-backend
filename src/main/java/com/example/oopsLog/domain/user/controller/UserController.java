@@ -2,7 +2,9 @@ package com.example.oopsLog.domain.user.controller;
 
 import com.example.oopsLog.common.response.ApiResponse;
 import com.example.oopsLog.domain.user.dto.request.UserCreateRequest;
+import com.example.oopsLog.domain.user.dto.request.UserLoginRequest;
 import com.example.oopsLog.domain.user.dto.request.UserUpdateRequest;
+import com.example.oopsLog.domain.user.dto.response.UserLoginResponse;
 import com.example.oopsLog.domain.user.dto.response.UserResponse;
 import com.example.oopsLog.domain.user.service.UserService;
 import jakarta.validation.Valid;
@@ -22,11 +24,16 @@ public class UserController {
         this.userService = userService;
     }
 
-    @PostMapping
-    public ResponseEntity<ApiResponse<UserResponse>> create(@Valid @RequestBody UserCreateRequest request) {
-        UserResponse response = UserResponse.from(userService.create(request));
+    @PostMapping("/signup")
+    public ResponseEntity<ApiResponse<UserResponse>> signUp(@Valid @RequestBody UserCreateRequest request) {
+        UserResponse response = UserResponse.from(userService.signUp(request));
         return ResponseEntity.created(URI.create("/api/users/" + response.userId()))
                 .body(ApiResponse.success(response));
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<ApiResponse<UserLoginResponse>> login(@Valid @RequestBody UserLoginRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(UserLoginResponse.from(userService.login(request))));
     }
 
     @GetMapping
