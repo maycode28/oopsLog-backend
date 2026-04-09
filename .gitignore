@@ -17,5 +17,9 @@ Thumbs.db
 .idea/
 *.iml
 
-# Logs
+# Logs & Temp files
 *.log
+*.txt
+
+# Environment & Secrets
+.env
