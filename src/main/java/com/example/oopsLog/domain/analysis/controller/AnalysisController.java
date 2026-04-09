@@ -1,19 +1,17 @@
 package com.example.oopsLog.domain.analysis.controller;
 
-import com.example.oopsLog.common.response.ApiResponse;
-import com.example.oopsLog.domain.analysis.dto.request.AnalysisCreateRequest;
-import com.example.oopsLog.domain.analysis.dto.request.AnalysisUpdateRequest;
+import com.example.oopsLog.domain.analysis.dto.request.AnalysisRequest;
 import com.example.oopsLog.domain.analysis.dto.response.AnalysisResponse;
+import com.example.oopsLog.domain.analysis.dto.response.FailureDetailResponse;
+import com.example.oopsLog.domain.analysis.dto.response.FailureListResponse;
 import com.example.oopsLog.domain.analysis.service.AnalysisService;
-import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.net.URI;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/analyses")
+@RequestMapping("/api/analyses/{userId}")
 public class AnalysisController {
 
     private final AnalysisService analysisService;
@@ -22,36 +20,30 @@ public class AnalysisController {
         this.analysisService = analysisService;
     }
 
-    @PostMapping
-    public ResponseEntity<ApiResponse<AnalysisResponse>> create(@Valid @RequestBody AnalysisCreateRequest request) {
-        AnalysisResponse response = AnalysisResponse.from(analysisService.create(request));
-        return ResponseEntity.created(URI.create("/api/analyses/" + response.correctionId()))
-                .body(ApiResponse.success(response));
+    // POST /api/analyses/{userId}/analyze
+    @PostMapping("/analyze")
+    public ResponseEntity<AnalysisResponse> analyze(
+            @PathVariable Long userId,
+            @RequestBody AnalysisRequest request) {
+        try {
+            return ResponseEntity.ok(analysisService.analyze(userId, request.getText()));
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.internalServerError().build();
+        }
     }
 
-    @GetMapping
-    public ResponseEntity<ApiResponse<List<AnalysisResponse>>> findAll() {
-        List<AnalysisResponse> responses = analysisService.findAll().stream().map(AnalysisResponse::from).toList();
-        return ResponseEntity.ok(ApiResponse.success(responses));
+    // GET /api/analyses/{userId}/failures
+    @GetMapping("/failures")
+    public ResponseEntity<List<FailureListResponse>> getFailureList(@PathVariable Long userId) {
+        return ResponseEntity.ok(analysisService.getFailureList(userId));
     }
 
-    @GetMapping("/{correctionId}")
-    public ResponseEntity<ApiResponse<AnalysisResponse>> findById(@PathVariable Long correctionId) {
-        return ResponseEntity.ok(ApiResponse.success(AnalysisResponse.from(analysisService.findById(correctionId))));
-    }
-
-    @PutMapping("/{correctionId}")
-    public ResponseEntity<ApiResponse<AnalysisResponse>> update(
-            @PathVariable Long correctionId,
-            @Valid @RequestBody AnalysisUpdateRequest request
-    ) {
-        return ResponseEntity.ok(ApiResponse.success(AnalysisResponse.from(analysisService.update(correctionId, request))));
-    }
-
-    @DeleteMapping("/{correctionId}")
-    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long correctionId) {
-        analysisService.delete(correctionId);
-        return ResponseEntity.ok(ApiResponse.success(null));
+    // GET /api/analyses/{userId}/failures/{failureId}
+    @GetMapping("/failures/{failureId}")
+    public ResponseEntity<FailureDetailResponse> getFailureDetail(
+            @PathVariable Long userId,
+            @PathVariable Long failureId) {
+        return ResponseEntity.ok(analysisService.getFailureDetail(userId, failureId));
     }
 }
-

@@ -9,23 +9,22 @@ import lombok.NoArgsConstructor;
 @Entity
 @Table(name = "correction_perspectives")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-public class AnalysisPerspective {
+public class CorrectionPerspective {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "perspective_id")
     private Long perspectiveId;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "correction_id", nullable = false)
-    private AnalysisCorrection correction;
+    private AiCorrection aiCorrection;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(columnDefinition = "TEXT", nullable = false)
     private String content;
 
-    public AnalysisPerspective(AnalysisCorrection correction, String content) {
-        this.correction = correction;
+    public CorrectionPerspective(AiCorrection aiCorrection, String content) {
+        this.aiCorrection = aiCorrection;
         this.content = content;
     }
 }
-

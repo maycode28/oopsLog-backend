@@ -1,7 +1,7 @@
 package com.example.oopsLog.domain.user.entity;
 
 import com.example.oopsLog.domain.animal.entity.UserAnimal;
-import com.example.oopsLog.domain.analysis.entity.AnalysisFailure;
+import com.example.oopsLog.domain.analysis.entity.Failure;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -48,20 +48,13 @@ public class User {
     private LocalDateTime createdAt;
 
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
-    private final List<AnalysisFailure> failures = new ArrayList<>();
+    private final List<Failure> failures = new ArrayList<>();
 
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
     private final List<UserAnimal> userAnimals = new ArrayList<>();
 
-    public User(
-            String loginId,
-            String password,
-            String name,
-            String nickname,
-            LocalDate birthDate,
-            String phoneNumber,
-            String email
-    ) {
+    public User(String loginId, String password, String name, String nickname,
+                LocalDate birthDate, String phoneNumber, String email) {
         this.loginId = loginId;
         this.password = password;
         this.name = name;
@@ -73,18 +66,11 @@ public class User {
 
     @PrePersist
     protected void prePersist() {
-        if (createdAt == null) {
-            createdAt = LocalDateTime.now();
-        }
+        if (createdAt == null) createdAt = LocalDateTime.now();
     }
 
-    public void updateProfile(
-            String name,
-            String nickname,
-            LocalDate birthDate,
-            String phoneNumber,
-            String email
-    ) {
+    public void updateProfile(String name, String nickname, LocalDate birthDate,
+                              String phoneNumber, String email) {
         this.name = name;
         this.nickname = nickname;
         this.birthDate = birthDate;
@@ -92,4 +78,3 @@ public class User {
         this.email = email;
     }
 }
-

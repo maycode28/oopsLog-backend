@@ -1,0 +1,517 @@
+diff --git a/src/main/java/com/example/oopsLog/domain/analysis/controller/AnalysisController.java b/src/main/java/com/example/oopsLog/domain/analysis/controller/AnalysisController.java
+index 50aa64b..d04552f 100644
+--- a/src/main/java/com/example/oopsLog/domain/analysis/controller/AnalysisController.java
++++ b/src/main/java/com/example/oopsLog/domain/analysis/controller/AnalysisController.java
+@@ -1,19 +1,17 @@
+ package com.example.oopsLog.domain.analysis.controller;
+ 
+-import com.example.oopsLog.common.response.ApiResponse;
+-import com.example.oopsLog.domain.analysis.dto.request.AnalysisCreateRequest;
+-import com.example.oopsLog.domain.analysis.dto.request.AnalysisUpdateRequest;
++import com.example.oopsLog.domain.analysis.dto.request.AnalysisRequest;
+ import com.example.oopsLog.domain.analysis.dto.response.AnalysisResponse;
++import com.example.oopsLog.domain.analysis.dto.response.FailureDetailResponse;
++import com.example.oopsLog.domain.analysis.dto.response.FailureListResponse;
+ import com.example.oopsLog.domain.analysis.service.AnalysisService;
+-import jakarta.validation.Valid;
+ import org.springframework.http.ResponseEntity;
+ import org.springframework.web.bind.annotation.*;
+ 
+-import java.net.URI;
+ import java.util.List;
+ 
+ @RestController
+-@RequestMapping("/api/analyses")
++@RequestMapping("/api/analyses/{userId}")
+ public class AnalysisController {
+ 
+     private final AnalysisService analysisService;
+@@ -22,36 +20,30 @@ public class AnalysisController {
+         this.analysisService = analysisService;
+     }
+ 
+-    @PostMapping
+-    public ResponseEntity<ApiResponse<AnalysisResponse>> create(@Valid @RequestBody AnalysisCreateRequest request) {
+-        AnalysisResponse response = AnalysisResponse.from(analysisService.create(request));
+-        return ResponseEntity.created(URI.create("/api/analyses/" + response.correctionId()))
+-                .body(ApiResponse.success(response));
++    // POST /api/analyses/{userId}/analyze
++    @PostMapping("/analyze")
++    public ResponseEntity<AnalysisResponse> analyze(
++            @PathVariable Long userId,
++            @RequestBody AnalysisRequest request) {
++        try {
++            return ResponseEntity.ok(analysisService.analyze(userId, request.getText()));
++        } catch (Exception e) {
++            e.printStackTrace();
++            return ResponseEntity.internalServerError().build();
++        }
+     }
+ 
+-    @GetMapping
+-    public ResponseEntity<ApiResponse<List<AnalysisResponse>>> findAll() {
+-        List<AnalysisResponse> responses = analysisService.findAll().stream().map(AnalysisResponse::from).toList();
+-        return ResponseEntity.ok(ApiResponse.success(responses));
++    // GET /api/analyses/{userId}/failures
++    @GetMapping("/failures")
++    public ResponseEntity<List<FailureListResponse>> getFailureList(@PathVariable Long userId) {
++        return ResponseEntity.ok(analysisService.getFailureList(userId));
+     }
+ 
+-    @GetMapping("/{correctionId}")
+-    public ResponseEntity<ApiResponse<AnalysisResponse>> findById(@PathVariable Long correctionId) {
+-        return ResponseEntity.ok(ApiResponse.success(AnalysisResponse.from(analysisService.findById(correctionId))));
++    // GET /api/analyses/{userId}/failures/{failureId}
++    @GetMapping("/failures/{failureId}")
++    public ResponseEntity<FailureDetailResponse> getFailureDetail(
++            @PathVariable Long userId,
++            @PathVariable Long failureId) {
++        return ResponseEntity.ok(analysisService.getFailureDetail(userId, failureId));
+     }
+-
+-    @PutMapping("/{correctionId}")
+-    public ResponseEntity<ApiResponse<AnalysisResponse>> update(
+-            @PathVariable Long correctionId,
+-            @Valid @RequestBody AnalysisUpdateRequest request
+-    ) {
+-        return ResponseEntity.ok(ApiResponse.success(AnalysisResponse.from(analysisService.update(correctionId, request))));
+-    }
+-
+-    @DeleteMapping("/{correctionId}")
+-    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long correctionId) {
+-        analysisService.delete(correctionId);
+-        return ResponseEntity.ok(ApiResponse.success(null));
+-    }
+-}
+-
++}
+\ No newline at end of file
+diff --git a/src/main/java/com/example/oopsLog/domain/analysis/dto/response/AnalysisResponse.java b/src/main/java/com/example/oopsLog/domain/analysis/dto/response/AnalysisResponse.java
+index c58ff7f..8aa665b 100644
+--- a/src/main/java/com/example/oopsLog/domain/analysis/dto/response/AnalysisResponse.java
++++ b/src/main/java/com/example/oopsLog/domain/analysis/dto/response/AnalysisResponse.java
+@@ -1,36 +1,41 @@
+ package com.example.oopsLog.domain.analysis.dto.response;
+ 
+-import com.example.oopsLog.domain.analysis.entity.AnalysisCorrection;
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++import com.fasterxml.jackson.annotation.JsonProperty;
++import lombok.Getter;
++import lombok.Setter;
+ 
+ import java.util.List;
+ 
+-public record AnalysisResponse(
+-        Long failureId,
+-        Long userId,
+-        String failureContent,
+-        Long correctionId,
+-        String coreInterpretation,
+-        String gardenerMessage,
+-        String facts,
+-        String deconstructionFact,
+-        String deconstructionInterpretation,
+-        List<String> distortions,
+-        List<String> perspectives
+-) {
+-    public static AnalysisResponse from(AnalysisCorrection correction) {
+-        return new AnalysisResponse(
+-                correction.getFailure().getFailureId(),
+-                correction.getFailure().getUser().getUserId(),
+-                correction.getFailure().getContent(),
+-                correction.getCorrectionId(),
+-                correction.getCoreInterpretation(),
+-                correction.getGardenerMessage(),
+-                correction.getFacts(),
+-                correction.getDeconstructionFact(),
+-                correction.getDeconstructionInterpretation(),
+-                correction.getDistortions().stream().map(d -> d.getDistortionType()).toList(),
+-                correction.getPerspectives().stream().map(p -> p.getContent()).toList()
+-        );
++@JsonIgnoreProperties(ignoreUnknown = true)
++@Setter
++@Getter
++public class AnalysisResponse {
++
++    private String title; // 추가: 분석 제목
++    private Analysis analysis;
++    private Deconstruction deconstruction;
++    private List<String> perspectives;
++
++    @JsonProperty("analysis_message") // 변경: 가드너 메시지에서 분석 메시지로
++    private String analysisMessage;
++
++    public AnalysisResponse() {}
++
++    @Setter
++    @Getter
++    public static class Analysis {
++        private List<String> distortions;
++        @JsonProperty("core_interpretation")
++        private String coreInterpretation;
++        private List<String> facts;
+     }
+-}
+ 
++    @Setter
++    @Getter
++    public static class Deconstruction {
++        private String fact;
++        private String interpretation;
++        private String distortion;
++    }
++}
+\ No newline at end of file
+diff --git a/src/main/java/com/example/oopsLog/domain/analysis/service/AnalysisService.java b/src/main/java/com/example/oopsLog/domain/analysis/service/AnalysisService.java
+index 933f364..4fceaca 100644
+--- a/src/main/java/com/example/oopsLog/domain/analysis/service/AnalysisService.java
++++ b/src/main/java/com/example/oopsLog/domain/analysis/service/AnalysisService.java
+@@ -1,91 +1,198 @@
+ package com.example.oopsLog.domain.analysis.service;
+ 
+-import com.example.oopsLog.domain.analysis.dto.request.AnalysisCreateRequest;
+-import com.example.oopsLog.domain.analysis.dto.request.AnalysisUpdateRequest;
+-import com.example.oopsLog.domain.analysis.entity.AnalysisCorrection;
+-import com.example.oopsLog.domain.analysis.entity.AnalysisDistortion;
+-import com.example.oopsLog.domain.analysis.entity.AnalysisFailure;
+-import com.example.oopsLog.domain.analysis.entity.AnalysisPerspective;
+-import com.example.oopsLog.domain.analysis.repository.AnalysisCorrectionRepository;
++import com.example.oopsLog.domain.analysis.dto.response.AnalysisResponse;
++import com.example.oopsLog.domain.analysis.dto.response.FailureDetailResponse;
++import com.example.oopsLog.domain.analysis.dto.response.FailureListResponse;
++import com.example.oopsLog.domain.analysis.entity.AiCorrection;
++import com.example.oopsLog.domain.analysis.entity.Failure;
++import com.example.oopsLog.domain.analysis.prompt.AiPromptBuilder;
++import com.example.oopsLog.domain.analysis.repository.AiCorrectionRepository;
++import com.example.oopsLog.domain.analysis.repository.FailureRepository;
+ import com.example.oopsLog.domain.user.entity.User;
+ import com.example.oopsLog.domain.user.repository.UserRepository;
+-import com.example.oopsLog.common.exception.CustomException;
+-import com.example.oopsLog.common.exception.ErrorCode;
+-import jakarta.transaction.Transactional;
++import com.fasterxml.jackson.databind.JsonNode;
++import com.fasterxml.jackson.databind.ObjectMapper;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.http.HttpEntity;
++import org.springframework.http.HttpHeaders;
++import org.springframework.http.MediaType;
++import org.springframework.http.ResponseEntity;
+ import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++import org.springframework.web.client.RestTemplate;
+ 
+ import java.util.List;
++import java.util.Map;
++import java.util.stream.Collectors;
+ 
+ @Service
+-@Transactional
++@Transactional(readOnly = true)
+ public class AnalysisService {
+ 
+-    private final AnalysisCorrectionRepository correctionRepository;
+-    private final UserRepository userRepository;
++    @Value("${gemini.api-key:}")
++    private String geminiApiKey;
++
++    @Value("${gemini.model:gemini-2.5-flash}")
++    private String geminiModel;
+ 
+-    public AnalysisService(
+-            AnalysisCorrectionRepository correctionRepository,
+-            UserRepository userRepository
+-    ) {
+-        this.correctionRepository = correctionRepository;
++    private final FailureRepository failureRepository;
++    private final AiCorrectionRepository aiCorrectionRepository;
++    private final UserRepository userRepository;
++    private final AiPromptBuilder promptBuilder;
++    private final RestTemplate restTemplate = new RestTemplate();
++    private final ObjectMapper objectMapper = new ObjectMapper();
++
++    public AnalysisService(FailureRepository failureRepository,
++                           AiCorrectionRepository aiCorrectionRepository,
++                           UserRepository userRepository,
++                           AiPromptBuilder promptBuilder) {
++        this.failureRepository = failureRepository;
++        this.aiCorrectionRepository = aiCorrectionRepository;
+         this.userRepository = userRepository;
++        this.promptBuilder = promptBuilder;
+     }
+ 
+-    public AnalysisCorrection create(AnalysisCreateRequest request) {
+-        User user = userRepository.findById(request.userId())
+-                .orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND));
+-
+-        AnalysisFailure failure = new AnalysisFailure(user, request.failureContent());
+-        AnalysisCorrection correction = new AnalysisCorrection(
+-                failure,
+-                request.coreInterpretation(),
+-                request.gardenerMessage(),
+-                request.facts(),
+-                request.deconstructionFact(),
+-                request.deconstructionInterpretation()
+-        );
+-
+-        request.distortions().forEach(type ->
+-                correction.getDistortions().add(new AnalysisDistortion(correction, type)));
+-        request.perspectives().forEach(content ->
+-                correction.getPerspectives().add(new AnalysisPerspective(correction, content)));
+-
+-        return correctionRepository.save(correction);
++    // 분석 실행 + 저장
++    @Transactional
++    public AnalysisResponse analyze(Long userId, String text) throws Exception {
++        if (geminiApiKey == null || geminiApiKey.isBlank()) {
++            throw new IllegalStateException("Missing Gemini API key.");
++        }
++
++        User user = userRepository.findById(userId)
++                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 유저입니다."));
++
++        // 1. Failure 저장
++        Failure failure = new Failure(user, text);
++        failureRepository.save(failure);
++
++        // 2. Gemini 호출
++        AnalysisResponse aiResponse = callGemini(text);
++
++        // 3. AiCorrection 저장
++        AnalysisResponse.Analysis analysis = aiResponse.getAnalysis();
++        AnalysisResponse.Deconstruction deconstruction = aiResponse.getDeconstruction();
++
++        AiCorrection correction = AiCorrection.builder()
++                .failure(failure)
++                .title(aiResponse.getTitle())
++                .coreInterpretation(analysis != null ? analysis.getCoreInterpretation() : null)
++                .analysisMessage(aiResponse.getAnalysisMessage())
++                .facts(analysis != null && analysis.getFacts() != null
++                        ? String.join(",", analysis.getFacts()) : null)
++                .deconstructionFact(deconstruction != null ? deconstruction.getFact() : null)
++                .deconstructionInterpretation(deconstruction != null ? deconstruction.getInterpretation() : null)
++                .build();
++
++        if (analysis != null && analysis.getDistortions() != null) {
++            analysis.getDistortions().forEach(correction::addDistortion);
++        }
++        if (aiResponse.getPerspectives() != null) {
++            aiResponse.getPerspectives().forEach(correction::addPerspective);
++        }
++
++        aiCorrectionRepository.save(correction);
++
++        return aiResponse;
+     }
+ 
+-    public List<AnalysisCorrection> findAll() {
+-        return correctionRepository.findAll();
++    // 특정 유저의 실패 기록 목록
++    public List<FailureListResponse> getFailureList(Long userId) {
++        return failureRepository.findByUser_UserIdOrderByCreatedAtDesc(userId)
++                .stream()
++                .map(FailureListResponse::new)
++                .collect(Collectors.toList());
+     }
+ 
+-    public AnalysisCorrection findById(Long correctionId) {
+-        return correctionRepository.findById(correctionId)
+-                .orElseThrow(() -> new CustomException(ErrorCode.ANALYSIS_NOT_FOUND));
++    // 특정 실패 기록 상세
++    public FailureDetailResponse getFailureDetail(Long userId, Long failureId) {
++        Failure failure = failureRepository.findById(failureId)
++                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 기록입니다."));
++
++        if (!failure.getUser().getUserId().equals(userId)) {
++            throw new SecurityException("접근 권한이 없습니다.");
++        }
++
++        return new FailureDetailResponse(failure);
+     }
+ 
+-    public AnalysisCorrection update(Long correctionId, AnalysisUpdateRequest request) {
+-        AnalysisCorrection correction = findById(correctionId);
+-        correction.getFailure().updateContent(request.failureContent());
+-        correction.updateMain(
+-                request.coreInterpretation(),
+-                request.gardenerMessage(),
+-                request.facts(),
+-                request.deconstructionFact(),
+-                request.deconstructionInterpretation()
++    // Gemini API 호출
++    private AnalysisResponse callGemini(String text) throws Exception {
++        String systemPrompt = promptBuilder.buildSystemPrompt();
++        String userPrompt = promptBuilder.buildUserPrompt(text);
++
++        HttpHeaders headers = new HttpHeaders();
++        headers.setContentType(MediaType.APPLICATION_JSON);
++
++        Map<String, Object> requestBody = Map.of(
++                "systemInstruction", Map.of(
++                        "parts", List.of(Map.of("text", systemPrompt))
++                ),
++                "contents", List.of(Map.of(
++                        "role", "user",
++                        "parts", List.of(Map.of("text", userPrompt))
++                )),
++                "generationConfig", Map.of(
++                        "temperature", 0.2,
++                        "maxOutputTokens", 4096,
++                        "responseMimeType", "application/json"
++                )
+         );
+ 
+-        correction.getDistortions().clear();
+-        request.distortions().forEach(type ->
+-                correction.getDistortions().add(new AnalysisDistortion(correction, type)));
++        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
++                + geminiModel + ":generateContent?key=" + geminiApiKey;
++
++        ResponseEntity<String> response = restTemplate.postForEntity(
++                url, new HttpEntity<>(requestBody, headers), String.class);
++
++        if (response.getBody() == null || response.getBody().isBlank()) {
++            throw new IllegalStateException("Gemini 응답 본문이 비어 있습니다.");
++        }
++
++        JsonNode root = objectMapper.readTree(response.getBody());
++        validateGeminiResponse(root);
+ 
+-        correction.getPerspectives().clear();
+-        request.perspectives().forEach(content ->
+-                correction.getPerspectives().add(new AnalysisPerspective(correction, content)));
++        String rawText = extractGeminiText(root);
++        String json = extractJsonObject(rawText);
+ 
+-        return correction;
++        return objectMapper.readValue(json, AnalysisResponse.class);
+     }
+ 
+-    public void delete(Long correctionId) {
+-        correctionRepository.delete(findById(correctionId));
++    private void validateGeminiResponse(JsonNode root) {
++        JsonNode candidates = root.path("candidates");
++        if (!candidates.isArray() || candidates.isEmpty()) {
++            throw new IllegalStateException("Gemini 응답에 candidates가 없습니다.");
++        }
++        String finishReason = candidates.get(0).path("finishReason").asText("");
++        if ("MAX_TOKENS".equals(finishReason)) {
++            throw new IllegalStateException("Gemini 응답이 maxOutputTokens 제한에 걸렸습니다.");
++        }
++        if ("SAFETY".equals(finishReason)) {
++            throw new IllegalStateException("Gemini 응답이 safety 정책으로 차단되었습니다.");
++        }
++        JsonNode parts = candidates.get(0).path("content").path("parts");
++        if (!parts.isArray() || parts.isEmpty()) {
++            throw new IllegalStateException("Gemini 응답 content.parts가 비어 있습니다.");
++        }
+     }
+-}
+ 
++    private String extractGeminiText(JsonNode root) {
++        JsonNode parts = root.path("candidates").get(0).path("content").path("parts");
++        StringBuilder sb = new StringBuilder();
++        for (JsonNode part : parts) {
++            if (part.has("text")) sb.append(part.path("text").asText(""));
++        }
++        return sb.toString().trim();
++    }
++
++    private String extractJsonObject(String content) {
++        if (content == null || content.isBlank()) return "{}";
++        String cleaned = content.trim();
++        if (cleaned.startsWith("```")) {
++            cleaned = cleaned.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
++        }
++        int start = cleaned.indexOf('{');
++        int end = cleaned.lastIndexOf('}');
++        return (start >= 0 && end > start) ? cleaned.substring(start, end + 1).trim() : cleaned;
++    }
++}
+\ No newline at end of file
+diff --git a/src/main/java/com/example/oopsLog/domain/user/entity/User.java b/src/main/java/com/example/oopsLog/domain/user/entity/User.java
+index 3a3d2e5..3f7a7ca 100644
+--- a/src/main/java/com/example/oopsLog/domain/user/entity/User.java
++++ b/src/main/java/com/example/oopsLog/domain/user/entity/User.java
+@@ -1,7 +1,7 @@
+ package com.example.oopsLog.domain.user.entity;
+ 
+ import com.example.oopsLog.domain.animal.entity.UserAnimal;
+-import com.example.oopsLog.domain.analysis.entity.AnalysisFailure;
++import com.example.oopsLog.domain.analysis.entity.Failure;
+ import jakarta.persistence.*;
+ import lombok.AccessLevel;
+ import lombok.Getter;
+@@ -48,20 +48,13 @@ public class User {
+     private LocalDateTime createdAt;
+ 
+     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
+-    private final List<AnalysisFailure> failures = new ArrayList<>();
++    private final List<Failure> failures = new ArrayList<>();
+ 
+     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
+     private final List<UserAnimal> userAnimals = new ArrayList<>();
+ 
+-    public User(
+-            String loginId,
+-            String password,
+-            String name,
+-            String nickname,
+-            LocalDate birthDate,
+-            String phoneNumber,
+-            String email
+-    ) {
++    public User(String loginId, String password, String name, String nickname,
++                LocalDate birthDate, String phoneNumber, String email) {
+         this.loginId = loginId;
+         this.password = password;
+         this.name = name;
+@@ -73,23 +66,15 @@ public class User {
+ 
+     @PrePersist
+     protected void prePersist() {
+-        if (createdAt == null) {
+-            createdAt = LocalDateTime.now();
+-        }
++        if (createdAt == null) createdAt = LocalDateTime.now();
+     }
+ 
+-    public void updateProfile(
+-            String name,
+-            String nickname,
+-            LocalDate birthDate,
+-            String phoneNumber,
+-            String email
+-    ) {
++    public void updateProfile(String name, String nickname, LocalDate birthDate,
++                              String phoneNumber, String email) {
+         this.name = name;
+         this.nickname = nickname;
+         this.birthDate = birthDate;
+         this.phoneNumber = phoneNumber;
+         this.email = email;
+     }
+-}
+-
++}
+\ No newline at end of file
+diff --git a/src/main/resources/db.sql b/src/main/resources/db.sql
+index 859822a..aab8640 100644
+--- a/src/main/resources/db.sql
++++ b/src/main/resources/db.sql
+@@ -21,12 +21,13 @@ CREATE TABLE failures (
+ CREATE TABLE ai_corrections (
+     correction_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+     failure_id BIGINT NOT NULL UNIQUE,
++    title VARCHAR(255),           -- AI가 지어준 분석 제목 추가
+     core_interpretation TEXT,
+-    gardener_message TEXT,
+-    facts TEXT,
++    analysis_message TEXT,        -- gardener_message -> analysis_message로 변경
++    facts TEXT,                   -- JSON 혹은 TEXT
+     deconstruction_fact TEXT,
+     deconstruction_interpretation TEXT,
+-    CONSTRAINT fk_ai_corrections_failure FOREIGN KEY (failure_id) REFERENCES failures(failure_id)
++    FOREIGN KEY (failure_id) REFERENCES failures(failure_id)
+ );
+ 
+ CREATE TABLE cognitive_distortions (
