@@ -7,6 +7,9 @@ import com.example.oopsLog.domain.user.dto.request.UserUpdateRequest;
 import com.example.oopsLog.domain.user.dto.response.UserLoginResponse;
 import com.example.oopsLog.domain.user.dto.response.UserResponse;
 import com.example.oopsLog.domain.user.service.UserService;
+import com.example.oopsLog.common.auth.SessionConst;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -32,8 +35,23 @@ public class UserController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<ApiResponse<UserLoginResponse>> login(@Valid @RequestBody UserLoginRequest request) {
-        return ResponseEntity.ok(ApiResponse.success(UserLoginResponse.from(userService.login(request))));
+    public ResponseEntity<ApiResponse<UserLoginResponse>> login(
+            @Valid @RequestBody UserLoginRequest request,
+            HttpServletRequest httpServletRequest
+    ) {
+        var user = userService.login(request);
+        HttpSession session = httpServletRequest.getSession(true);
+        session.setAttribute(SessionConst.LOGIN_USER_ID, user.getUserId());
+        return ResponseEntity.ok(ApiResponse.success(UserLoginResponse.from(user)));
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<ApiResponse<Void>> logout(HttpServletRequest httpServletRequest) {
+        HttpSession session = httpServletRequest.getSession(false);
+        if (session != null) {
+            session.invalidate();
+        }
+        return ResponseEntity.ok(ApiResponse.success(null));
     }
 
     @GetMapping
@@ -57,4 +75,3 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success(null));
     }
 }
-
