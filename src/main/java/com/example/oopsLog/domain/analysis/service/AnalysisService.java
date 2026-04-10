@@ -19,10 +19,13 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 @Service
@@ -35,21 +38,32 @@ public class AnalysisService {
     @Value("${gemini.model:gemini-2.5-flash}")
     private String geminiModel;
 
+    private final int geminiRetryMaxAttempts;
+
     private final FailureRepository failureRepository;
     private final AiCorrectionRepository aiCorrectionRepository;
     private final UserRepository userRepository;
     private final AiPromptBuilder promptBuilder;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AnalysisService(FailureRepository failureRepository,
                            AiCorrectionRepository aiCorrectionRepository,
                            UserRepository userRepository,
-                           AiPromptBuilder promptBuilder) {
+                           AiPromptBuilder promptBuilder,
+                           @Value("${gemini.timeout.connect-ms:5000}") int geminiConnectTimeoutMs,
+                           @Value("${gemini.timeout.read-ms:30000}") int geminiReadTimeoutMs,
+                           @Value("${gemini.retry.max-attempts:4}") int geminiRetryMaxAttempts) {
         this.failureRepository = failureRepository;
         this.aiCorrectionRepository = aiCorrectionRepository;
         this.userRepository = userRepository;
         this.promptBuilder = promptBuilder;
+        this.geminiRetryMaxAttempts = geminiRetryMaxAttempts;
+
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(geminiConnectTimeoutMs);
+        factory.setReadTimeout(geminiReadTimeoutMs);
+        this.restTemplate = new RestTemplate(factory);
     }
 
     // 분석 실행 + 저장
@@ -142,7 +156,7 @@ public class AnalysisService {
         String url = "https://generativelanguage.googleapis.com/v1beta/models/"
                 + geminiModel + ":generateContent?key=" + geminiApiKey;
 
-        ResponseEntity<String> response = restTemplate.postForEntity(
+        ResponseEntity<String> response = postWithRetry(
                 url, new HttpEntity<>(requestBody, headers), String.class);
 
         if (response.getBody() == null || response.getBody().isBlank()) {
@@ -156,6 +170,38 @@ public class AnalysisService {
         String json = extractJsonObject(rawText);
 
         return objectMapper.readValue(json, AnalysisResponse.class);
+    }
+
+    private <T> ResponseEntity<T> postWithRetry(String url, HttpEntity<?> request, Class<T> responseType) {
+        int attempts = Math.max(1, geminiRetryMaxAttempts);
+        HttpStatusCodeException lastException = null;
+
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                return restTemplate.postForEntity(url, request, responseType);
+            } catch (HttpStatusCodeException e) {
+                lastException = e;
+                int status = e.getStatusCode().value();
+                boolean retryable = status == 429 || status == 500 || status == 502 || status == 503 || status == 504;
+                if (!retryable || attempt == attempts) throw e;
+
+                sleepBackoff(attempt);
+            }
+        }
+        throw lastException != null ? lastException : new IllegalStateException("Gemini 호출에 실패했습니다.");
+    }
+
+    private void sleepBackoff(int attempt) {
+        long baseMs = 400L;
+        long maxMs = 4000L;
+        long exp = (long) (baseMs * Math.pow(2, Math.max(0, attempt - 1)));
+        long jitter = ThreadLocalRandom.current().nextLong(0, 250);
+        long sleepMs = Math.min(maxMs, exp + jitter);
+        try {
+            Thread.sleep(sleepMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void validateGeminiResponse(JsonNode root) {
