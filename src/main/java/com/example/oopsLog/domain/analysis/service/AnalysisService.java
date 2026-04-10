@@ -76,37 +76,33 @@ public class AnalysisService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 유저입니다."));
 
-        // 1. Failure 저장
         Failure failure = new Failure(user, text);
         failureRepository.save(failure);
 
-        // 2. Gemini 호출
         AnalysisResponse aiResponse = callGemini(text);
-
-        // 3. AiCorrection 저장
-        AnalysisResponse.Analysis analysis = aiResponse.getAnalysis();
-        AnalysisResponse.Deconstruction deconstruction = aiResponse.getDeconstruction();
 
         AiCorrection correction = AiCorrection.builder()
                 .failure(failure)
                 .title(aiResponse.getTitle())
-                .coreInterpretation(analysis != null ? analysis.getCoreInterpretation() : null)
                 .analysisMessage(aiResponse.getAnalysisMessage())
-                .facts(analysis != null && analysis.getFacts() != null
-                        ? String.join(",", analysis.getFacts()) : null)
-                .deconstructionFact(deconstruction != null ? deconstruction.getFact() : null)
-                .deconstructionInterpretation(deconstruction != null ? deconstruction.getInterpretation() : null)
+                .facts(aiResponse.getFacts() != null
+                        ? objectMapper.writeValueAsString(aiResponse.getFacts())
+                        : null)
                 .build();
 
-        if (analysis != null && analysis.getDistortions() != null) {
-            analysis.getDistortions().forEach(correction::addDistortion);
-        }
-        if (aiResponse.getPerspectives() != null) {
-            aiResponse.getPerspectives().forEach(correction::addPerspective);
+        if (aiResponse.getFlipCards() != null) {
+            for (int i = 0; i < aiResponse.getFlipCards().size(); i++) {
+                AnalysisResponse.FlipCard card = aiResponse.getFlipCards().get(i);
+                correction.addDistortionCard(
+                        card.getLabel(),
+                        card.getMistaken(),
+                        card.getReframed(),
+                        i
+                );
+            }
         }
 
         aiCorrectionRepository.save(correction);
-
         return aiResponse;
     }
 
@@ -147,7 +143,9 @@ public class AnalysisService {
                         "parts", List.of(Map.of("text", userPrompt))
                 )),
                 "generationConfig", Map.of(
-                        "temperature", 0.2,
+                        "temperature", 0.55,
+                        "topP", 0.9,
+                        "topK", 40,
                         "maxOutputTokens", 4096,
                         "responseMimeType", "application/json"
                 )
