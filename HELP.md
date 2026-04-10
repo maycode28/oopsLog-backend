@@ -1,5 +1,11 @@
 # Getting Started
 
+## Session Auth (minimal)
+- Login: `POST /api/users/login` (sets `JSESSIONID` cookie)
+- Logout: `POST /api/users/logout` (invalidates session)
+- Protected APIs: all `/api/**` except `/api/users/signup`, `/api/users/login`, `/api/users/logout`
+- Frontend: include credentials (e.g. `fetch(..., { credentials: "include" })` / Axios `withCredentials: true`)
+
 ### Reference Documentation
 For further reference, please consider the following sections:
 
@@ -22,4 +28,3 @@ The following guides illustrate how to use some features concretely:
 These additional references should also help you:
 
 * [Gradle Build Scans – insights for your project's build](https://scans.gradle.com#gradle)
-
