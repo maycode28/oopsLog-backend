@@ -1,91 +1,198 @@
 package com.example.oopsLog.domain.analysis.service;
 
-import com.example.oopsLog.domain.analysis.dto.request.AnalysisCreateRequest;
-import com.example.oopsLog.domain.analysis.dto.request.AnalysisUpdateRequest;
-import com.example.oopsLog.domain.analysis.entity.AnalysisCorrection;
-import com.example.oopsLog.domain.analysis.entity.AnalysisDistortion;
-import com.example.oopsLog.domain.analysis.entity.AnalysisFailure;
-import com.example.oopsLog.domain.analysis.entity.AnalysisPerspective;
-import com.example.oopsLog.domain.analysis.repository.AnalysisCorrectionRepository;
+import com.example.oopsLog.domain.analysis.dto.response.AnalysisResponse;
+import com.example.oopsLog.domain.analysis.dto.response.FailureDetailResponse;
+import com.example.oopsLog.domain.analysis.dto.response.FailureListResponse;
+import com.example.oopsLog.domain.analysis.entity.AiCorrection;
+import com.example.oopsLog.domain.analysis.entity.Failure;
+import com.example.oopsLog.domain.analysis.prompt.AiPromptBuilder;
+import com.example.oopsLog.domain.analysis.repository.AiCorrectionRepository;
+import com.example.oopsLog.domain.analysis.repository.FailureRepository;
 import com.example.oopsLog.domain.user.entity.User;
 import com.example.oopsLog.domain.user.repository.UserRepository;
-import com.example.oopsLog.common.exception.CustomException;
-import com.example.oopsLog.common.exception.ErrorCode;
-import jakarta.transaction.Transactional;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
-@Transactional
+@Transactional(readOnly = true)
 public class AnalysisService {
 
-    private final AnalysisCorrectionRepository correctionRepository;
+    @Value("${gemini.api-key:}")
+    private String geminiApiKey;
+
+    @Value("${gemini.model:gemini-2.5-flash}")
+    private String geminiModel;
+
+    private final FailureRepository failureRepository;
+    private final AiCorrectionRepository aiCorrectionRepository;
     private final UserRepository userRepository;
+    private final AiPromptBuilder promptBuilder;
+    private final RestTemplate restTemplate = new RestTemplate();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public AnalysisService(
-            AnalysisCorrectionRepository correctionRepository,
-            UserRepository userRepository
-    ) {
-        this.correctionRepository = correctionRepository;
+    public AnalysisService(FailureRepository failureRepository,
+                           AiCorrectionRepository aiCorrectionRepository,
+                           UserRepository userRepository,
+                           AiPromptBuilder promptBuilder) {
+        this.failureRepository = failureRepository;
+        this.aiCorrectionRepository = aiCorrectionRepository;
         this.userRepository = userRepository;
+        this.promptBuilder = promptBuilder;
     }
 
-    public AnalysisCorrection create(AnalysisCreateRequest request) {
-        User user = userRepository.findById(request.userId())
-                .orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND));
+    // 분석 실행 + 저장
+    @Transactional
+    public AnalysisResponse analyze(Long userId, String text) throws Exception {
+        if (geminiApiKey == null || geminiApiKey.isBlank()) {
+            throw new IllegalStateException("Missing Gemini API key.");
+        }
 
-        AnalysisFailure failure = new AnalysisFailure(user, request.failureContent());
-        AnalysisCorrection correction = new AnalysisCorrection(
-                failure,
-                request.coreInterpretation(),
-                request.gardenerMessage(),
-                request.facts(),
-                request.deconstructionFact(),
-                request.deconstructionInterpretation()
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 유저입니다."));
+
+        // 1. Failure 저장
+        Failure failure = new Failure(user, text);
+        failureRepository.save(failure);
+
+        // 2. Gemini 호출
+        AnalysisResponse aiResponse = callGemini(text);
+
+        // 3. AiCorrection 저장
+        AnalysisResponse.Analysis analysis = aiResponse.getAnalysis();
+        AnalysisResponse.Deconstruction deconstruction = aiResponse.getDeconstruction();
+
+        AiCorrection correction = AiCorrection.builder()
+                .failure(failure)
+                .title(aiResponse.getTitle())
+                .coreInterpretation(analysis != null ? analysis.getCoreInterpretation() : null)
+                .analysisMessage(aiResponse.getAnalysisMessage())
+                .facts(analysis != null && analysis.getFacts() != null
+                        ? String.join(",", analysis.getFacts()) : null)
+                .deconstructionFact(deconstruction != null ? deconstruction.getFact() : null)
+                .deconstructionInterpretation(deconstruction != null ? deconstruction.getInterpretation() : null)
+                .build();
+
+        if (analysis != null && analysis.getDistortions() != null) {
+            analysis.getDistortions().forEach(correction::addDistortion);
+        }
+        if (aiResponse.getPerspectives() != null) {
+            aiResponse.getPerspectives().forEach(correction::addPerspective);
+        }
+
+        aiCorrectionRepository.save(correction);
+
+        return aiResponse;
+    }
+
+    // 특정 유저의 실패 기록 목록
+    public List<FailureListResponse> getFailureList(Long userId) {
+        return failureRepository.findByUser_UserIdOrderByCreatedAtDesc(userId)
+                .stream()
+                .map(FailureListResponse::new)
+                .collect(Collectors.toList());
+    }
+
+    // 특정 실패 기록 상세
+    public FailureDetailResponse getFailureDetail(Long userId, Long failureId) {
+        Failure failure = failureRepository.findById(failureId)
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 기록입니다."));
+
+        if (!failure.getUser().getUserId().equals(userId)) {
+            throw new SecurityException("접근 권한이 없습니다.");
+        }
+
+        return new FailureDetailResponse(failure);
+    }
+
+    // Gemini API 호출
+    private AnalysisResponse callGemini(String text) throws Exception {
+        String systemPrompt = promptBuilder.buildSystemPrompt();
+        String userPrompt = promptBuilder.buildUserPrompt(text);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        Map<String, Object> requestBody = Map.of(
+                "systemInstruction", Map.of(
+                        "parts", List.of(Map.of("text", systemPrompt))
+                ),
+                "contents", List.of(Map.of(
+                        "role", "user",
+                        "parts", List.of(Map.of("text", userPrompt))
+                )),
+                "generationConfig", Map.of(
+                        "temperature", 0.2,
+                        "maxOutputTokens", 4096,
+                        "responseMimeType", "application/json"
+                )
         );
 
-        request.distortions().forEach(type ->
-                correction.getDistortions().add(new AnalysisDistortion(correction, type)));
-        request.perspectives().forEach(content ->
-                correction.getPerspectives().add(new AnalysisPerspective(correction, content)));
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
+                + geminiModel + ":generateContent?key=" + geminiApiKey;
 
-        return correctionRepository.save(correction);
+        ResponseEntity<String> response = restTemplate.postForEntity(
+                url, new HttpEntity<>(requestBody, headers), String.class);
+
+        if (response.getBody() == null || response.getBody().isBlank()) {
+            throw new IllegalStateException("Gemini 응답 본문이 비어 있습니다.");
+        }
+
+        JsonNode root = objectMapper.readTree(response.getBody());
+        validateGeminiResponse(root);
+
+        String rawText = extractGeminiText(root);
+        String json = extractJsonObject(rawText);
+
+        return objectMapper.readValue(json, AnalysisResponse.class);
     }
 
-    public List<AnalysisCorrection> findAll() {
-        return correctionRepository.findAll();
+    private void validateGeminiResponse(JsonNode root) {
+        JsonNode candidates = root.path("candidates");
+        if (!candidates.isArray() || candidates.isEmpty()) {
+            throw new IllegalStateException("Gemini 응답에 candidates가 없습니다.");
+        }
+        String finishReason = candidates.get(0).path("finishReason").asText("");
+        if ("MAX_TOKENS".equals(finishReason)) {
+            throw new IllegalStateException("Gemini 응답이 maxOutputTokens 제한에 걸렸습니다.");
+        }
+        if ("SAFETY".equals(finishReason)) {
+            throw new IllegalStateException("Gemini 응답이 safety 정책으로 차단되었습니다.");
+        }
+        JsonNode parts = candidates.get(0).path("content").path("parts");
+        if (!parts.isArray() || parts.isEmpty()) {
+            throw new IllegalStateException("Gemini 응답 content.parts가 비어 있습니다.");
+        }
     }
 
-    public AnalysisCorrection findById(Long correctionId) {
-        return correctionRepository.findById(correctionId)
-                .orElseThrow(() -> new CustomException(ErrorCode.ANALYSIS_NOT_FOUND));
+    private String extractGeminiText(JsonNode root) {
+        JsonNode parts = root.path("candidates").get(0).path("content").path("parts");
+        StringBuilder sb = new StringBuilder();
+        for (JsonNode part : parts) {
+            if (part.has("text")) sb.append(part.path("text").asText(""));
+        }
+        return sb.toString().trim();
     }
 
-    public AnalysisCorrection update(Long correctionId, AnalysisUpdateRequest request) {
-        AnalysisCorrection correction = findById(correctionId);
-        correction.getFailure().updateContent(request.failureContent());
-        correction.updateMain(
-                request.coreInterpretation(),
-                request.gardenerMessage(),
-                request.facts(),
-                request.deconstructionFact(),
-                request.deconstructionInterpretation()
-        );
-
-        correction.getDistortions().clear();
-        request.distortions().forEach(type ->
-                correction.getDistortions().add(new AnalysisDistortion(correction, type)));
-
-        correction.getPerspectives().clear();
-        request.perspectives().forEach(content ->
-                correction.getPerspectives().add(new AnalysisPerspective(correction, content)));
-
-        return correction;
-    }
-
-    public void delete(Long correctionId) {
-        correctionRepository.delete(findById(correctionId));
+    private String extractJsonObject(String content) {
+        if (content == null || content.isBlank()) return "{}";
+        String cleaned = content.trim();
+        if (cleaned.startsWith("```")) {
+            cleaned = cleaned.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
+        }
+        int start = cleaned.indexOf('{');
+        int end = cleaned.lastIndexOf('}');
+        return (start >= 0 && end > start) ? cleaned.substring(start, end + 1).trim() : cleaned;
     }
 }
-

@@ -21,12 +21,13 @@ CREATE TABLE failures (
 CREATE TABLE ai_corrections (
     correction_id BIGINT AUTO_INCREMENT PRIMARY KEY,
     failure_id BIGINT NOT NULL UNIQUE,
+    title VARCHAR(255),           -- AI가 지어준 분석 제목 추가
     core_interpretation TEXT,
-    gardener_message TEXT,
-    facts TEXT,
+    analysis_message TEXT,        -- gardener_message -> analysis_message로 변경
+    facts TEXT,                   -- JSON 혹은 TEXT
     deconstruction_fact TEXT,
     deconstruction_interpretation TEXT,
-    CONSTRAINT fk_ai_corrections_failure FOREIGN KEY (failure_id) REFERENCES failures(failure_id)
+    FOREIGN KEY (failure_id) REFERENCES failures(failure_id)
 );
 
 CREATE TABLE cognitive_distortions (
