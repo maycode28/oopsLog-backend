@@ -1,5 +1,7 @@
 package com.example.oopsLog.domain.analysis.service;
 
+import com.example.oopsLog.common.exception.CustomException;
+import com.example.oopsLog.common.exception.ErrorCode;
 import com.example.oopsLog.domain.analysis.dto.response.AnalysisResponse;
 import com.example.oopsLog.domain.analysis.dto.response.FailureDetailResponse;
 import com.example.oopsLog.domain.analysis.dto.response.FailureListResponse;
@@ -17,11 +19,11 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 
 import java.util.List;
 import java.util.Map;
@@ -66,47 +68,54 @@ public class AnalysisService {
         this.restTemplate = new RestTemplate(factory);
     }
 
-    // 분석 실행 + 저장
     @Transactional
-    public AnalysisResponse analyze(Long userId, String text) throws Exception {
+    public AnalysisResponse analyze(Long userId, String text) {
         if (geminiApiKey == null || geminiApiKey.isBlank()) {
-            throw new IllegalStateException("Missing Gemini API key.");
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
         }
 
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 유저입니다."));
+                .orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND));
 
         Failure failure = new Failure(user, text);
         failureRepository.save(failure);
 
-        AnalysisResponse aiResponse = callGemini(text);
+        try {
+            AnalysisResponse aiResponse = callGemini(text);
 
-        AiCorrection correction = AiCorrection.builder()
-                .failure(failure)
-                .title(aiResponse.getTitle())
-                .analysisMessage(aiResponse.getAnalysisMessage())
-                .facts(aiResponse.getFacts() != null
-                        ? objectMapper.writeValueAsString(aiResponse.getFacts())
-                        : null)
-                .build();
+            AiCorrection correction = AiCorrection.builder()
+                    .failure(failure)
+                    .title(aiResponse.getTitle())
+                    .analysisMessage(aiResponse.getAnalysisMessage())
+                    .facts(aiResponse.getFacts() != null
+                            ? objectMapper.writeValueAsString(aiResponse.getFacts())
+                            : null)
+                    .build();
 
-        if (aiResponse.getFlipCards() != null) {
-            for (int i = 0; i < aiResponse.getFlipCards().size(); i++) {
-                AnalysisResponse.FlipCard card = aiResponse.getFlipCards().get(i);
-                correction.addDistortionCard(
-                        card.getLabel(),
-                        card.getMistaken(),
-                        card.getReframed(),
-                        i
-                );
+            if (aiResponse.getFlipCards() != null) {
+                for (int i = 0; i < aiResponse.getFlipCards().size(); i++) {
+                    AnalysisResponse.FlipCard card = aiResponse.getFlipCards().get(i);
+                    correction.addDistortionCard(
+                            card.getLabel(),
+                            card.getMistaken(),
+                            card.getReframed(),
+                            i
+                    );
+                }
             }
-        }
 
-        aiCorrectionRepository.save(correction);
-        return aiResponse;
+            aiCorrectionRepository.save(correction);
+            return aiResponse;
+
+        } catch (HttpStatusCodeException e) {
+            throw e;
+        } catch (CustomException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
+        }
     }
 
-    // 특정 유저의 실패 기록 목록
     public List<FailureListResponse> getFailureList(Long userId) {
         return failureRepository.findByUser_UserIdOrderByCreatedAtDesc(userId)
                 .stream()
@@ -114,60 +123,65 @@ public class AnalysisService {
                 .collect(Collectors.toList());
     }
 
-    // 특정 실패 기록 상세
     public FailureDetailResponse getFailureDetail(Long userId, Long failureId) {
         Failure failure = failureRepository.findById(failureId)
-                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 기록입니다."));
+                .orElseThrow(() -> new CustomException(ErrorCode.ANALYSIS_NOT_FOUND));
 
         if (!failure.getUser().getUserId().equals(userId)) {
-            throw new SecurityException("접근 권한이 없습니다.");
+            throw new CustomException(ErrorCode.FORBIDDEN);
         }
 
         return new FailureDetailResponse(failure);
     }
 
-    // Gemini API 호출
-    private AnalysisResponse callGemini(String text) throws Exception {
-        String systemPrompt = promptBuilder.buildSystemPrompt();
-        String userPrompt = promptBuilder.buildUserPrompt(text);
+    private AnalysisResponse callGemini(String text) {
+        try {
+            String systemPrompt = promptBuilder.buildSystemPrompt();
+            String userPrompt = promptBuilder.buildUserPrompt(text);
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
 
-        Map<String, Object> requestBody = Map.of(
-                "systemInstruction", Map.of(
-                        "parts", List.of(Map.of("text", systemPrompt))
-                ),
-                "contents", List.of(Map.of(
-                        "role", "user",
-                        "parts", List.of(Map.of("text", userPrompt))
-                )),
-                "generationConfig", Map.of(
-                        "temperature", 0.55,
-                        "topP", 0.9,
-                        "topK", 40,
-                        "maxOutputTokens", 4096,
-                        "responseMimeType", "application/json"
-                )
-        );
+            Map<String, Object> requestBody = Map.of(
+                    "systemInstruction", Map.of(
+                            "parts", List.of(Map.of("text", systemPrompt))
+                    ),
+                    "contents", List.of(Map.of(
+                            "role", "user",
+                            "parts", List.of(Map.of("text", userPrompt))
+                    )),
+                    "generationConfig", Map.of(
+                            "temperature", 0.55,
+                            "topP", 0.9,
+                            "topK", 40,
+                            "maxOutputTokens", 2048,
+                            "responseMimeType", "application/json"
+                    )
+            );
 
-        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
-                + geminiModel + ":generateContent?key=" + geminiApiKey;
+            String url = "https://generativelanguage.googleapis.com/v1beta/models/"
+                    + geminiModel + ":generateContent?key=" + geminiApiKey;
 
-        ResponseEntity<String> response = postWithRetry(
-                url, new HttpEntity<>(requestBody, headers), String.class);
+            ResponseEntity<String> response = postWithRetry(
+                    url, new HttpEntity<>(requestBody, headers), String.class);
 
-        if (response.getBody() == null || response.getBody().isBlank()) {
-            throw new IllegalStateException("Gemini 응답 본문이 비어 있습니다.");
+            if (response.getBody() == null || response.getBody().isBlank()) {
+                throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
+            }
+
+            JsonNode root = objectMapper.readTree(response.getBody());
+            validateGeminiResponse(root);
+
+            String rawText = extractGeminiText(root);
+            String json = extractJsonObject(rawText);
+
+            return objectMapper.readValue(json, AnalysisResponse.class);
+
+        } catch (HttpStatusCodeException | CustomException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
         }
-
-        JsonNode root = objectMapper.readTree(response.getBody());
-        validateGeminiResponse(root);
-
-        String rawText = extractGeminiText(root);
-        String json = extractJsonObject(rawText);
-
-        return objectMapper.readValue(json, AnalysisResponse.class);
     }
 
     private <T> ResponseEntity<T> postWithRetry(String url, HttpEntity<?> request, Class<T> responseType) {
@@ -181,12 +195,16 @@ public class AnalysisService {
                 lastException = e;
                 int status = e.getStatusCode().value();
                 boolean retryable = status == 429 || status == 500 || status == 502 || status == 503 || status == 504;
-                if (!retryable || attempt == attempts) throw e;
-
+                if (!retryable || attempt == attempts) {
+                    throw e;
+                }
                 sleepBackoff(attempt);
             }
         }
-        throw lastException != null ? lastException : new IllegalStateException("Gemini 호출에 실패했습니다.");
+
+        throw lastException != null
+                ? lastException
+                : new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
     }
 
     private void sleepBackoff(int attempt) {
@@ -205,18 +223,20 @@ public class AnalysisService {
     private void validateGeminiResponse(JsonNode root) {
         JsonNode candidates = root.path("candidates");
         if (!candidates.isArray() || candidates.isEmpty()) {
-            throw new IllegalStateException("Gemini 응답에 candidates가 없습니다.");
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
         }
+
         String finishReason = candidates.get(0).path("finishReason").asText("");
         if ("MAX_TOKENS".equals(finishReason)) {
-            throw new IllegalStateException("Gemini 응답이 maxOutputTokens 제한에 걸렸습니다.");
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
         }
         if ("SAFETY".equals(finishReason)) {
-            throw new IllegalStateException("Gemini 응답이 safety 정책으로 차단되었습니다.");
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
         }
+
         JsonNode parts = candidates.get(0).path("content").path("parts");
         if (!parts.isArray() || parts.isEmpty()) {
-            throw new IllegalStateException("Gemini 응답 content.parts가 비어 있습니다.");
+            throw new CustomException(ErrorCode.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -224,19 +244,29 @@ public class AnalysisService {
         JsonNode parts = root.path("candidates").get(0).path("content").path("parts");
         StringBuilder sb = new StringBuilder();
         for (JsonNode part : parts) {
-            if (part.has("text")) sb.append(part.path("text").asText(""));
+            if (part.has("text")) {
+                sb.append(part.path("text").asText(""));
+            }
         }
         return sb.toString().trim();
     }
 
     private String extractJsonObject(String content) {
-        if (content == null || content.isBlank()) return "{}";
+        if (content == null || content.isBlank()) {
+            return "{}";
+        }
+
         String cleaned = content.trim();
         if (cleaned.startsWith("```")) {
-            cleaned = cleaned.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
+            cleaned = cleaned.replaceFirst("^```(?:json)?\\s*", "")
+                    .replaceFirst("\\s*```$", "")
+                    .trim();
         }
+
         int start = cleaned.indexOf('{');
         int end = cleaned.lastIndexOf('}');
-        return (start >= 0 && end > start) ? cleaned.substring(start, end + 1).trim() : cleaned;
+        return (start >= 0 && end > start)
+                ? cleaned.substring(start, end + 1).trim()
+                : cleaned;
     }
 }
