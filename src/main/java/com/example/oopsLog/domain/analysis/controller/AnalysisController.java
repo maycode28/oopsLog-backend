@@ -1,5 +1,6 @@
 package com.example.oopsLog.domain.analysis.controller;
 
+import com.example.oopsLog.common.response.ApiResponse;
 import com.example.oopsLog.domain.analysis.dto.request.AnalysisRequest;
 import com.example.oopsLog.domain.analysis.dto.response.AnalysisResponse;
 import com.example.oopsLog.domain.analysis.dto.response.FailureDetailResponse;
@@ -22,28 +23,30 @@ public class AnalysisController {
 
     // POST /api/analyses/{userId}/analyze
     @PostMapping("/analyze")
-    public ResponseEntity<AnalysisResponse> analyze(
+    public ResponseEntity<ApiResponse<AnalysisResponse>> analyze(
             @PathVariable Long userId,
             @RequestBody AnalysisRequest request) {
-        try {
-            return ResponseEntity.ok(analysisService.analyze(userId, request.getText()));
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.internalServerError().build();
-        }
+
+        AnalysisResponse response = analysisService.analyze(userId, request.getText());
+        return ResponseEntity.ok(ApiResponse.success(response));
     }
 
     // GET /api/analyses/{userId}/failures
     @GetMapping("/failures")
-    public ResponseEntity<List<FailureListResponse>> getFailureList(@PathVariable Long userId) {
-        return ResponseEntity.ok(analysisService.getFailureList(userId));
+    public ResponseEntity<ApiResponse<List<FailureListResponse>>> getFailureList(
+            @PathVariable Long userId) {
+
+        List<FailureListResponse> response = analysisService.getFailureList(userId);
+        return ResponseEntity.ok(ApiResponse.success(response));
     }
 
     // GET /api/analyses/{userId}/failures/{failureId}
     @GetMapping("/failures/{failureId}")
-    public ResponseEntity<FailureDetailResponse> getFailureDetail(
+    public ResponseEntity<ApiResponse<FailureDetailResponse>> getFailureDetail(
             @PathVariable Long userId,
             @PathVariable Long failureId) {
-        return ResponseEntity.ok(analysisService.getFailureDetail(userId, failureId));
+
+        FailureDetailResponse response = analysisService.getFailureDetail(userId, failureId);
+        return ResponseEntity.ok(ApiResponse.success(response));
     }
 }

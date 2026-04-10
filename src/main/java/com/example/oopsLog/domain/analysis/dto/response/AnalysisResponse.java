@@ -8,34 +8,33 @@ import lombok.Setter;
 import java.util.List;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-@Setter
 @Getter
+@Setter
 public class AnalysisResponse {
 
-    private String title; // 추가: 분석 제목
-    private Analysis analysis;
-    private Deconstruction deconstruction;
-    private List<String> perspectives;
+    @JsonProperty("ti")
+    private String title;
 
-    @JsonProperty("analysis_message") // 변경: 가드너 메시지에서 분석 메시지로
+    @JsonProperty("fc")
+    private List<FlipCard> flipCards;
+
+    @JsonProperty("fs")
+    private List<String> facts;
+
+    @JsonProperty("am")
     private String analysisMessage;
 
-    public AnalysisResponse() {}
-
-    @Setter
     @Getter
-    public static class Analysis {
-        private List<String> distortions;
-        @JsonProperty("core_interpretation")
-        private String coreInterpretation;
-        private List<String> facts;
-    }
-
     @Setter
-    @Getter
-    public static class Deconstruction {
-        private String fact;
-        private String interpretation;
-        private String distortion;
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class FlipCard {
+        @JsonProperty("l")
+        private String label;
+
+        @JsonProperty("m")
+        private String mistaken;
+
+        @JsonProperty("r")
+        private String reframed;
     }
 }

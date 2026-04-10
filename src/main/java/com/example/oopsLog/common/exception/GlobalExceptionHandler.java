@@ -6,6 +6,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.client.HttpStatusCodeException;
 
 import java.util.stream.Collectors;
 
@@ -32,6 +33,13 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(errorMessage.isBlank() ? ErrorCode.INVALID_INPUT.getMessage() : errorMessage));
     }
 
+    @ExceptionHandler(HttpStatusCodeException.class)
+    public ResponseEntity<ApiResponse<Void>> handleHttpStatusCodeException(HttpStatusCodeException exception) {
+        return ResponseEntity
+                .status(exception.getStatusCode())
+                .body(ApiResponse.error("Gemini API 호출에 실패했습니다."));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleException(Exception exception) {
         return ResponseEntity
@@ -39,4 +47,3 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(ErrorCode.INTERNAL_SERVER_ERROR.getMessage()));
     }
 }
-

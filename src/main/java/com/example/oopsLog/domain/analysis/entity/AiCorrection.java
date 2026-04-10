@@ -27,45 +27,24 @@ public class AiCorrection {
     @Column(length = 255)
     private String title;
 
-    @Column(name = "core_interpretation", columnDefinition = "TEXT")
-    private String coreInterpretation;
-
     @Column(name = "analysis_message", columnDefinition = "TEXT")
     private String analysisMessage;
 
     @Column(columnDefinition = "TEXT")
     private String facts;
 
-    @Column(name = "deconstruction_fact", columnDefinition = "TEXT")
-    private String deconstructionFact;
-
-    @Column(name = "deconstruction_interpretation", columnDefinition = "TEXT")
-    private String deconstructionInterpretation;
-
     @OneToMany(mappedBy = "aiCorrection", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<CognitiveDistortion> distortions = new ArrayList<>();
-
-    @OneToMany(mappedBy = "aiCorrection", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<CorrectionPerspective> perspectives = new ArrayList<>();
+    private List<DistortionCard> distortionCards = new ArrayList<>();
 
     @Builder
-    public AiCorrection(Failure failure, String title, String coreInterpretation,
-                        String analysisMessage, String facts,
-                        String deconstructionFact, String deconstructionInterpretation) {
+    public AiCorrection(Failure failure, String title, String analysisMessage, String facts) {
         this.failure = failure;
         this.title = title;
-        this.coreInterpretation = coreInterpretation;
         this.analysisMessage = analysisMessage;
         this.facts = facts;
-        this.deconstructionFact = deconstructionFact;
-        this.deconstructionInterpretation = deconstructionInterpretation;
     }
 
-    public void addDistortion(String distortionType) {
-        this.distortions.add(new CognitiveDistortion(this, distortionType));
-    }
-
-    public void addPerspective(String content) {
-        this.perspectives.add(new CorrectionPerspective(this, content));
+    public void addDistortionCard(String label, String mistakenText, String reframedText, int cardOrder) {
+        this.distortionCards.add(new DistortionCard(this, label, mistakenText, reframedText, cardOrder));
     }
 }
