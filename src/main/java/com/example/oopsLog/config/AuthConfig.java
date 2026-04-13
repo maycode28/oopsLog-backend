@@ -10,14 +10,14 @@ public class AuthConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(new SessionAuthInterceptor())
-                .addPathPatterns("/api/**")
-                .excludePathPatterns(
-                        "/api/users/signup",
-                        "/api/users/login",
-                        "/api/users/logout",
-                        "/error",
-                        "/favicon.ico"
-                );
+//        registry.addInterceptor(new SessionAuthInterceptor())
+//                .addPathPatterns("/api/**")
+//                .excludePathPatterns(
+//                        "/api/users/signup",
+//                        "/api/users/login",
+//                        "/api/users/logout",
+//                        "/error",
+//                        "/favicon.ico"
+//                );
     }
 }
