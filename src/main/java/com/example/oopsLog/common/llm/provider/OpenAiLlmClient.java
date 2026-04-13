@@ -58,16 +58,7 @@ public class OpenAiLlmClient implements LlmClient {
         headers.setBearerAuth(apiKey);
         headers.add("X-Request-Id", requestId);
 
-        Map<String, Object> requestBody = Map.of(
-                "model", model,
-                "messages", List.of(
-                        Map.of("role", "system", "content", request.systemPrompt()),
-                        Map.of("role", "user", "content", request.userPrompt())
-                ),
-                "temperature", 0.2,
-                "max_tokens", 4096,
-                "response_format", Map.of("type", "json_object")
-        );
+        Map<String, Object> requestBody = buildChatCompletionsRequestBody(request);
 
         try {
             ResponseEntity<String> response = restTemplate.postForEntity(
@@ -98,6 +89,20 @@ public class OpenAiLlmClient implements LlmClient {
         } catch (Exception e) {
             throw new LlmProviderException(provider(), LlmFailureCategory.UNKNOWN, null, "OpenAI unexpected error", e);
         }
+    }
+
+    private Map<String, Object> buildChatCompletionsRequestBody(LlmRequest request) {
+        return Map.of(
+                "model", model,
+                "messages", List.of(
+                        Map.of("role", "system", "content", request.systemPrompt()),
+                        Map.of("role", "user", "content", request.userPrompt())
+                ),
+                "temperature", 0.2,
+                // GPT-5 계열 모델은 max_tokens 대신 max_completion_tokens를 요구합니다.
+                "max_completion_tokens", 4096,
+                "response_format", Map.of("type", "json_object")
+        );
     }
 
     private String extractChatCompletionText(JsonNode root) {
