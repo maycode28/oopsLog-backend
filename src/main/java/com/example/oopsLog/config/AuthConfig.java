@@ -16,7 +16,8 @@ public class AuthConfig implements WebMvcConfigurer {
                         "/api/users/signup",
                         "/api/users/login",
                         "/api/users/logout",
-                        "/error"
+                        "/error",
+                        "/favicon.ico"
                 );
     }
 }
